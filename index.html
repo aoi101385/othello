@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="あなたが黒、CPUが白。ブラウザですぐに遊べるシンプルなオセロ。">
+  <meta name="theme-color" content="#111c24">
+  <title>オセロ | CPU対戦</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans JP", sans-serif; color: #eff5f5; background: #111c24; font-synthesis: none; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100svh; padding: 28px 16px; display: grid; place-items: center; }
+    main { width: min(100%, 520px); }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+    h1 { font-size: 1.7rem; font-weight: 700; margin: 0; letter-spacing: .08em; }
+    .mode { color: #a8bcc6; font-size: .875rem; }
+    .scores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .score { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border: 1px solid #3c4d58; border-radius: 12px; background: #192831; }
+    .score.active { border-color: #6cdfb4; box-shadow: inset 0 -2px #6cdfb4; }
+    .score span { font-size: .9375rem; }
+    .score strong { margin-left: auto; font-size: 1.8rem; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .disc { display: block; width: 76%; aspect-ratio: 1; border-radius: 50%; pointer-events: none; }
+    .disc.black { background: radial-gradient(circle at 35% 25%, #424c51, #10171b 70%); box-shadow: 0 3px 3px #001b1b66, inset 0 1px 1px #71818a66; }
+    .disc.white { background: radial-gradient(circle at 35% 25%, #ffffff, #e0e9e9 75%); box-shadow: 0 3px 3px #001b1b66, inset 0 0 0 1px #fff9; }
+    .score .disc { width: 27px; flex-shrink: 0; }
+    #board { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px; padding: 7px; border-radius: 10px; background: #092f2c; border: 1px solid #387b69; box-shadow: 0 16px 40px #0003; }
+    .cell { appearance: none; aspect-ratio: 1; border: 0; border-radius: 0; padding: 0; min-width: 0; display: grid; place-items: center; background: #237653; position: relative; cursor: default; -webkit-tap-highlight-color: transparent; }
+    .cell:nth-child(16n+2), .cell:nth-child(16n+4), .cell:nth-child(16n+6), .cell:nth-child(16n+8), .cell:nth-child(16n+9), .cell:nth-child(16n+11), .cell:nth-child(16n+13), .cell:nth-child(16n+15) { background: #267e59; }
+    .cell.legal { cursor: pointer; }
+    .cell.legal::before { content: ""; width: 15%; aspect-ratio: 1; border-radius: 50%; background: #b3e7cf; opacity: .75; }
+    .cell.last::after { content: ""; position: absolute; width: 12%; aspect-ratio: 1; border-radius: 50%; background: #e69c37; box-shadow: 0 0 0 2px #15262b; }
+    @media (hover: hover) { .cell.legal:hover { background: #40976e; } .cell.legal:hover::before { opacity: 1; } }
+    .cell:focus-visible { z-index: 1; outline: 3px solid #fff2a5; outline-offset: -3px; }
+    .status { min-height: 88px; padding: 22px 4px 12px; }
+    #status { margin: 0; font-size: 1.125rem; font-weight: 650; }
+    #hint { color: #adc3ca; font-size: .875rem; margin: 7px 0 0; line-height: 1.6; }
+    footer { display: flex; justify-content: flex-end; margin-top: 8px; }
+    #restart { font: inherit; font-size: .9375rem; color: #edf5f5; background: #21343f; border: 1px solid #4a616d; border-radius: 8px; padding: 11px 18px; cursor: pointer; min-height: 44px; }
+    #restart:hover { background: #2c4551; }
+    #restart:focus-visible { outline: 3px solid #b3e7cf; outline-offset: 3px; }
+    @media (max-width: 380px) { body { padding: 20px 12px; } .score { padding: 12px; gap: 8px; } header { margin-bottom: 18px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>オセロ</h1><span class="mode">CPU対戦</span></header>
+    <section class="scores" aria-label="石の数">
+      <div class="score active" id="human-score"><i class="disc black" aria-hidden="true"></i><span>あなた（黒）</span><strong id="black-count">2</strong></div>
+      <div class="score" id="cpu-score"><i class="disc white" aria-hidden="true"></i><span>CPU（白）</span><strong id="white-count">2</strong></div>
+    </section>
+    <div id="board" role="group" aria-label="オセロ盤、8行8列"></div>
+    <section class="status" role="status" aria-live="polite" aria-atomic="true"><p id="status">あなたの番です</p><p id="hint">点のあるマスに黒い石を置いてください。</p></section>
+    <footer><button id="restart" type="button">最初から</button></footer>
+    <noscript>このゲームを遊ぶには、ブラウザのJavaScriptを有効にしてください。</noscript>
+  </main>
+  <script id="engine">
+  (() => {
+    'use strict';
+    const BLACK = 1, WHITE = -1;
+    const directions = [-1, 0, 1].flatMap(r => [-1, 0, 1].filter(c => r || c).map(c => [r, c]));
+    function initialBoard() {
+      const board = Array(64).fill(0);
+      board[27] = board[36] = WHITE;
+      board[28] = board[35] = BLACK;
+      return board;
+    }
+    function flips(board, index, player) {
+      if (!Number.isInteger(index) || index < 0 || index > 63 || board[index] !== 0) return [];
+      const row = Math.floor(index / 8), col = index % 8, result = [];
+      for (const [dr, dc] of directions) {
+        const line = [];
+        let r = row + dr, c = col + dc;
+        while (r >= 0 && r < 8 && c >= 0 && c < 8 && board[r * 8 + c] === -player) {
+          line.push(r * 8 + c); r += dr; c += dc;
+        }
+        if (line.length && r >= 0 && r < 8 && c >= 0 && c < 8 && board[r * 8 + c] === player) result.push(...line);
+      }
+      return result;
+    }
+    function legalMoves(board, player) {
+      const moves = [];
+      for (let i = 0; i < 64; i++) if (flips(board, i, player).length) moves.push(i);
+      return moves;
+    }
+    function play(board, index, player) {
+      const captured = flips(board, index, player);
+      if (!captured.length) return null;
+      const next = board.slice(); next[index] = player;
+      for (const i of captured) next[i] = player;
+      return next;
+    }
+    function counts(board) { return { black: board.filter(x => x === BLACK).length, white: board.filter(x => x === WHITE).length }; }
+    function turnState(board, player) {
+      if (legalMoves(board, player).length) return { player, passed: false, over: false };
+      if (legalMoves(board, -player).length) return { player: -player, passed: true, over: false };
+      return { player: 0, passed: false, over: true };
+    }
+    const weights = [
+      100,-25,12,5,5,12,-25,100,
+      -25,-45,-3,-3,-3,-3,-45,-25,
+      12,-3,3,1,1,3,-3,12,
+      5,-3,1,0,0,1,-3,5,
+      5,-3,1,0,0,1,-3,5,
+      12,-3,3,1,1,3,-3,12,
+      -25,-45,-3,-3,-3,-3,-45,-25,
+      100,-25,12,5,5,12,-25,100
+    ];
+    function evaluate(board, player) {
+      const empty = board.filter(x => !x).length;
+      const pieces = board.reduce((s, x) => s + x * player, 0);
+      return board.reduce((s, x, i) => s + x * player * weights[i], 0)
+        + 6 * (legalMoves(board, player).length - legalMoves(board, -player).length)
+        + pieces * (empty < 16 ? 6 : 1);
+    }
+    function search(board, player, depth, alpha, beta) {
+      const moves = legalMoves(board, player);
+      if (!moves.length) {
+        if (!legalMoves(board, -player).length) {
+          const difference = board.reduce((s, x) => s + x * player, 0);
+          return Math.sign(difference) * 100000 + difference;
+        }
+        return -search(board, -player, depth, -beta, -alpha);
+      }
+      if (depth === 0) return evaluate(board, player);
+      let best = -Infinity;
+      moves.sort((a, b) => weights[b] - weights[a]);
+      for (const move of moves) {
+        const value = -search(play(board, move, player), -player, depth - 1, -beta, -alpha);
+        best = Math.max(best, value); alpha = Math.max(alpha, value);
+        if (alpha >= beta) break;
+      }
+      return best;
+    }
+    function chooseMove(board, player) {
+      let bestMove = null, bestValue = -Infinity;
+      for (const move of legalMoves(board, player)) {
+        const value = -search(play(board, move, player), -player, 2, -Infinity, Infinity);
+        if (value > bestValue) { bestValue = value; bestMove = move; }
+      }
+      return bestMove;
+    }
+    globalThis.Othello = { BLACK, WHITE, initialBoard, flips, legalMoves, play, counts, turnState, chooseMove };
+  })();
+  </script>
+  <script id="game">
+  (() => {
+    'use strict';
+    const { BLACK, WHITE, initialBoard, legalMoves, play, counts, turnState, chooseMove } = Othello;
+    const boardElement = document.getElementById('board');
+    const status = document.getElementById('status'), hint = document.getElementById('hint');
+    let board, player, over, timer = null, generation = 0, lastMove = -1, passMessage = '';
+    const cells = Array.from({ length: 64 }, (_, index) => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'cell';
+      button.addEventListener('click', () => {
+        if (over || player !== BLACK) return;
+        const next = play(board, index, BLACK);
+        if (!next) return;
+        board = next; lastMove = index; player = WHITE; advance();
+      });
+      boardElement.append(button); return button;
+    });
+    function render() {
+      const legal = new Set(!over && player === BLACK ? legalMoves(board, BLACK) : []);
+      cells.forEach((cell, index) => {
+        const value = board[index];
+        cell.className = 'cell' + (legal.has(index) ? ' legal' : '') + (index === lastMove ? ' last' : '');
+        cell.setAttribute('aria-label', `${String.fromCharCode(65 + index % 8)}${Math.floor(index / 8) + 1}、${value === BLACK ? '黒' : value === WHITE ? '白' : legal.has(index) ? '置けます' : '空き'}`);
+        cell.setAttribute('aria-disabled', String(!legal.has(index)));
+        cell.tabIndex = legal.has(index) ? 0 : -1;
+        cell.innerHTML = value ? `<span class="disc ${value === BLACK ? 'black' : 'white'}" aria-hidden="true"></span>` : '';
+      });
+      const score = counts(board);
+      document.getElementById('black-count').textContent = score.black;
+      document.getElementById('white-count').textContent = score.white;
+      document.getElementById('human-score').classList.toggle('active', !over && player === BLACK);
+      document.getElementById('cpu-score').classList.toggle('active', !over && player === WHITE);
+      boardElement.setAttribute('aria-busy', String(!over && player === WHITE));
+      if (over) {
+        status.textContent = score.black > score.white ? 'あなたの勝ち！' : score.black < score.white ? 'CPUの勝ち' : '引き分け';
+        hint.textContent = `黒 ${score.black} 対 白 ${score.white}。「最初から」で、もう一局。`;
+      } else {
+        status.textContent = player === BLACK ? 'あなたの番です' : 'CPUが考えています…';
+        hint.textContent = passMessage || (player === BLACK ? '点のあるマスに黒い石を置いてください。' : '白い石が置かれるまでお待ちください。');
+      }
+    }
+    function advance() {
+      clearTimeout(timer); timer = null; passMessage = '';
+      const next = turnState(board, player);
+      if (next.passed) passMessage = player === BLACK ? '黒は置ける場所がないため、自動でパスしました。' : '白は置ける場所がないため、自動でパスしました。';
+      player = next.player; over = next.over; render();
+      if (!over && player === WHITE) {
+        const currentGeneration = generation;
+        timer = setTimeout(() => {
+          if (generation !== currentGeneration || player !== WHITE || over) return;
+          const move = chooseMove(board, WHITE);
+          if (move !== null) { board = play(board, move, WHITE); lastMove = move; }
+          player = BLACK; advance();
+        }, 420);
+      }
+    }
+    function restart() {
+      generation++; clearTimeout(timer); timer = null;
+      board = initialBoard(); player = BLACK; over = false; lastMove = -1; advance();
+    }
+    document.getElementById('restart').addEventListener('click', restart);
+    restart();
+  })();
+  </script>
+</body>
+</html>
